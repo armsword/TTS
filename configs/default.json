@@ -1,0 +1,31 @@
+{
+  "audio": {
+    "sample_rate": 22050,
+    "n_fft": 1024,
+    "hop_length": 256,
+    "n_mels": 80
+  },
+  "text_encoder": {
+    "vocab_size": 256,
+    "hidden_dim": 192,
+    "n_layers": 2,
+    "n_heads": 4
+  },
+  "decoder": {
+    "in_channels": 96,
+    "out_channels": 80,
+    "n_layers": 6
+  },
+  "duration_predictor": {
+    "in_channels": 192,
+    "n_layers": 2
+  },
+  "hifigan": {
+    "upsample_rates": [8, 8, 2, 2]
+  },
+  "train": {
+    "batch_size": 16,
+    "lr": 1e-4,
+    "epochs": 200
+  }
+}
