@@ -33,14 +33,16 @@ class TTSInferencer:
         self,
         vits_path: Optional[str] = None,
         hifigan_path: Optional[str] = None,
-        device: str = "auto"
+        device: str = "auto",
+        checkpoint_path: Optional[str] = None,
     ):
         """初始化推理引擎
 
         Args:
-            vits_path: VITS 模型路径（可选）
+            vits_path: VITS 模型路径（可选，已废弃，推荐用 checkpoint_path）
             hifigan_path: HiFi-GAN 模型路径（可选）
             device: 设备，"auto" 自动选择
+            checkpoint_path: checkpoint 路径，会自动从中提取 model_state_dict
         """
         if device == "auto":
             if torch.cuda.is_available():
@@ -65,13 +67,28 @@ class TTSInferencer:
         self.model = VITS(self.configs).to(self.device)
         self.hifigan = HiFiGAN(HiFiGANConfig()).to(self.device)
 
-        # 加载权重（如果提供）
-        if vits_path and os.path.exists(vits_path):
+        # 加载权重优先级：checkpoint_path > vits_path
+        loaded = False
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            state_dict = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+            if "model_state_dict" in state_dict:
+                self.model.load_state_dict(state_dict["model_state_dict"])
+                epoch = state_dict.get("epoch", -1) + 1
+                loss = state_dict.get("train_loss", -1)
+                print(f"[TTSInferencer] Loaded checkpoint: epoch={epoch}, loss={loss:.4f}")
+            else:
+                self.model.load_state_dict(state_dict)
+            loaded = True
+        elif vits_path and os.path.exists(vits_path):
             state_dict = torch.load(vits_path, map_location=self.device, weights_only=False)
             if "model_state_dict" in state_dict:
                 self.model.load_state_dict(state_dict["model_state_dict"])
             else:
                 self.model.load_state_dict(state_dict)
+            loaded = True
+
+        if not loaded:
+            print("[TTSInferencer] Warning: No checkpoint loaded, using random weights")
 
         if hifigan_path and os.path.exists(hifigan_path):
             state_dict = torch.load(hifigan_path, map_location=self.device, weights_only=False)
@@ -83,7 +100,7 @@ class TTSInferencer:
         else:
             self.use_hifigan = False
             if not HAS_LIBROSA:
-                print("Warning: librosa not installed and HiFi-GAN not available. Using naive Griffin-Lim.")
+                print("[TTSInferencer] Warning: librosa not installed and HiFi-GAN not available. Using Griffin-Lim.")
 
         # 设置为评估模式
         self.model.eval()
@@ -114,10 +131,14 @@ class TTSInferencer:
                 waveform = np.clip(waveform, -1.0, 1.0)
             else:
                 # Griffin-Lim 替代方案
-                mel_np = mel_output.squeeze().cpu().numpy()
+                mel_db = mel_output.squeeze().cpu().numpy()  # dB 格式
                 if HAS_LIBROSA:
+                    # 将 dB 转换回线性功率谱
+                    # dB = 10 * log10(power) => power = 10^(dB/10)
+                    mel_power = np.power(10.0, mel_db / 10.0)
+
                     waveform = librosa.feature.inverse.mel_to_audio(
-                        mel_np,
+                        mel_power,
                         sr=22050,
                         n_fft=1024,
                         hop_length=256,
@@ -128,10 +149,10 @@ class TTSInferencer:
                     import scipy.signal
                     n_fft, hop_length, win_length = 1024, 256, 1024
                     # 简单的ISTFT (近似)
-                    waveform = np.zeros(mel_np.shape[1] * hop_length)
-                    for i in range(mel_np.shape[1]):
+                    waveform = np.zeros(mel_db.shape[1] * hop_length)
+                    for i in range(mel_db.shape[1]):
                         # 简化处理
-                        waveform[i * hop_length] = mel_np[0, i] if i < mel_np.shape[1] else 0
+                        waveform[i * hop_length] = mel_db[0, i] if i < mel_db.shape[1] else 0
 
         return waveform.astype(np.float32)
 

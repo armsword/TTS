@@ -51,13 +51,13 @@ class VITS(nn.Module):
         # 时长预测
         duration_pred = self.duration_predictor(encoder_output, mask)
 
-        # 展长：优先使用目标时长，否则使用预测时长
+        # 展长：优先使用目标时长（teacher forcing），否则使用预测时长
         if durations is not None:
-            # 使用目标时长展长
-            expanded_output = regulate_length(encoder_output, durations.float())
+            # 使用 ground truth 时长（每个音素的帧数）
+            expanded_output = regulate_length(encoder_output, durations, phoneme_lengths)
         else:
-            # 使用预测时长展长
-            expanded_output = regulate_length(encoder_output, duration_pred)
+            # 使用预测时长（推理时）
+            expanded_output = regulate_length(encoder_output, duration_pred, phoneme_lengths)
 
         # VAE: 计算 mu 和 log_var
         mu = self.proj_mu(expanded_output)
@@ -73,14 +73,11 @@ class VITS(nn.Module):
         if mel_targets is not None:
             target_len = mel_targets.shape[2]
             mel_output_len = mel_output.shape[2]
-
             if mel_output_len != target_len:
-                # 截断或 padding 到目标长度
                 if mel_output_len > target_len:
                     mel_output = mel_output[:, :, :target_len]
                 else:
-                    padding = target_len - mel_output_len
-                    mel_output = F.pad(mel_output, (0, padding))
+                    mel_output = F.pad(mel_output, (0, target_len - mel_output_len))
 
         return {
             'mel_output': mel_output,
@@ -108,8 +105,8 @@ class VITS(nn.Module):
         # 时长预测
         duration_pred = self.duration_predictor(encoder_output, mask)
 
-        # 展长
-        expanded_output = regulate_length(encoder_output, duration_pred)
+        # 展长（推理时用预测时长）
+        expanded_output = regulate_length(encoder_output, duration_pred, phoneme_lengths)
 
         # VAE: 计算 mu 和 log_var（使用确定性输出，log_var=0）
         mu = self.proj_mu(expanded_output)

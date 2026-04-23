@@ -54,18 +54,32 @@ class TTSDataset(torch.utils.data.Dataset):
         mel_path = self.mels_dir / filename
         mel = np.load(mel_path)  # shape: (n_mels, time)
 
-        # 加载音素 ID
+        # 加载音素 ID（可能已被 padding 预处理）
         base_name = Path(filename).stem
         phoneme_path = self.phonemes_dir / f"{base_name}.npy"
         phoneme_ids = np.load(phoneme_path)  # shape: (time,)
 
-        # 计算 duration（梅尔时间步数）
-        duration = mel.shape[1]
+        # 过滤掉 PAD 填充（ID=0 的位置），取真实的音素
+        valid_mask = phoneme_ids != 0
+        phoneme_ids = phoneme_ids[valid_mask]
+
+        # 计算 per-phoneme duration（将总帧数按音素比例分配）
+        # 使用整数 durations 保证 sum(durations) == total_frames
+        total_frames = mel.shape[1]
+        n_phonemes = len(phoneme_ids)
+
+        # 整数均分
+        base_frames = total_frames // n_phonemes
+        remainder = total_frames - base_frames * n_phonemes
+
+        # 前 remainder 个音素多分配 1 帧
+        durations = np.full(n_phonemes, base_frames, dtype=np.float32)
+        durations[:remainder] += 1.0
 
         return {
             "phoneme_ids": torch.from_numpy(phoneme_ids).long(),
             "mel": torch.from_numpy(mel).float(),
-            "duration": torch.tensor(duration, dtype=torch.long),
+            "duration": torch.from_numpy(durations).float(),
             "text": text,
         }
 
@@ -77,7 +91,7 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         batch: 样本列表
 
     Returns:
-        padding 后的 batch
+        padding 后的 batch，duration 为 (B, max_phoneme_len) 形状
     """
     # 找出最大长度
     max_phoneme_len = max(item["phoneme_ids"].shape[0] for item in batch)
@@ -89,11 +103,8 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     # Padding 后的 tensor
     phoneme_ids_padded = torch.zeros(batch_size, max_phoneme_len, dtype=torch.long)
     mel_padded = torch.zeros(batch_size, n_mels, max_mel_len, dtype=torch.float32)
-
-    # 处理 duration（如果有）
-    has_duration = "duration" in batch[0]
-    if has_duration:
-        durations = torch.zeros(batch_size, dtype=torch.long)
+    duration_padded = torch.zeros(batch_size, max_phoneme_len, dtype=torch.float32)
+    phoneme_lengths = torch.zeros(batch_size, dtype=torch.long)
 
     texts = []
 
@@ -103,20 +114,17 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
 
         phoneme_ids_padded[i, :phoneme_len] = item["phoneme_ids"]
         mel_padded[i, :, :mel_len] = item["mel"]
-        if has_duration:
-            durations[i] = item["duration"]
+        duration_padded[i, :phoneme_len] = item["duration"]
+        phoneme_lengths[i] = phoneme_len
         texts.append(item.get("text", ""))
 
-    result = {
+    return {
         "phoneme_ids": phoneme_ids_padded,
+        "phoneme_lengths": phoneme_lengths,
         "mel": mel_padded,
+        "duration": duration_padded,
         "texts": texts,
     }
-
-    if has_duration:
-        result["duration"] = durations
-
-    return result
 
 
 def get_dataloader(filelist_path: str, data_dir: str, batch_size: int = 16,

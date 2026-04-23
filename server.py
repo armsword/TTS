@@ -3,23 +3,29 @@ import os
 import sys
 import io
 
+# MPS 不支持嵌套张量算子，需要 fallback 到 CPU
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 # 添加 src 目录到 path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, send_from_directory
 from infer import TTSInferencer
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='webui', static_url_path='')
 
 # 全局推理器实例
 inferencer = None
+
+
+CHECKPOINT_PATH = "data/checkpoints/checkpoint_epoch_30.pt"
 
 
 def get_inferencer():
     """获取或创建推理器实例"""
     global inferencer
     if inferencer is None:
-        inferencer = TTSInferencer()
+        inferencer = TTSInferencer(checkpoint_path=CHECKPOINT_PATH)
     return inferencer
 
 
@@ -70,7 +76,6 @@ def tts():
 @app.route("/", methods=["GET"])
 def index():
     """T-137: 返回 index.html"""
-    from flask import send_from_directory
     return send_from_directory("webui", "index.html")
 
 

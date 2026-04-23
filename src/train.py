@@ -8,7 +8,8 @@ from typing import Dict, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 
-def compute_loss(model_output: Dict[str, torch.Tensor], targets: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+def compute_loss(model_output: Dict[str, torch.Tensor], targets: Dict[str, torch.Tensor],
+                 phoneme_lengths: torch.Tensor = None) -> Dict[str, torch.Tensor]:
     """计算 VITS 模型的总损失
 
     Args:
@@ -19,40 +20,37 @@ def compute_loss(model_output: Dict[str, torch.Tensor], targets: Dict[str, torch
             - log_var: VAE 对数方差 (batch, time, latent_dim)
         targets: 目标，包含:
             - mel: 目标梅尔频谱 (batch, n_mels, time)
-
-    Returns:
-        损失字典，包含:
-            - total_loss: 总损失
-            - mel_loss: 梅尔频谱重建损失 (L1)
-            - duration_loss: 时长预测损失 (MSE)
-            - kl_loss: KL 散度损失
+        phoneme_lengths: 每个样本的实际音素数 (batch,)
     """
     mel_output = model_output["mel_output"]
     duration_pred = model_output["duration_pred"]
     mu = model_output["mu"]
     log_var = model_output["log_var"]
-
     mel_target = targets["mel"]
 
     # 梅尔频谱重建损失 (L1)
     mel_loss = torch.nn.functional.l1_loss(mel_output, mel_target)
 
-    # 时长预测损失 (MSE) - 预测时长应该接近目标时长
-    # 注意：duration_pred 是每个音素的时长，targets 中可能有 duration
+    # 时长预测损失 (MSE) - 只在有效音素位置计算
     duration_target = targets.get("duration", None)
-    if duration_target is not None:
-        duration_pred_log = torch.log(duration_pred + 1e-5)
-        duration_target_log = torch.log(duration_target.float() + 1e-5)
-        duration_loss = torch.nn.functional.mse_loss(duration_pred_log, duration_target_log)
+    if duration_target is not None and phoneme_lengths is not None:
+        # 构建 mask：只保留有效音素位置
+        batch_size, max_len = duration_pred.shape
+        mask = torch.zeros_like(duration_pred)
+        for b in range(batch_size):
+            mask[b, :phoneme_lengths[b]] = 1.0
+
+        duration_pred_log = torch.log(duration_pred.clamp(min=1e-5))
+        duration_target_log = torch.log(duration_target.clamp(min=1e-5))
+        diff = (duration_pred_log - duration_target_log) ** 2
+        duration_loss = (diff * mask).sum() / mask.sum().clamp(min=1)
     else:
         duration_loss = torch.tensor(0.0, device=mel_output.device)
 
     # KL 散度损失
-    # KL(N(mu, sigma) || N(0, 1)) = -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
     kl_loss = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
-    kl_loss = kl_loss / (mu.size(0) * mu.size(1) * mu.size(2))  # 归一化
+    kl_loss = kl_loss / (mu.size(0) * mu.size(1) * mu.size(2))
 
-    # 总损失
     total_loss = mel_loss + duration_loss + kl_loss
 
     return {
@@ -131,16 +129,16 @@ def train(
         for batch_idx, batch in enumerate(train_dataloader):
             # 将数据移到设备
             phoneme_ids = batch["phoneme_ids"].to(device)
+            phoneme_lengths = batch["phoneme_lengths"].to(device)
             mel = batch["mel"].to(device)
+            durations = batch["duration"].to(device)
 
-            # 准备长度
-            lengths = torch.full((phoneme_ids.size(0),), phoneme_ids.size(1), device=device)
+            # 前向传播（使用 ground truth durations 做 teacher forcing）
+            model_outputs = model(phoneme_ids, phoneme_lengths, mel, durations=durations)
 
-            # 前向传播（不传 durations，让模型自己预测时长）
-            model_outputs = model(phoneme_ids, lengths, mel)
-
-            # 计算损失
-            targets = {"mel": mel}
+            # 计算损失（只对有效音素位置计算 duration loss）
+            targets = {"mel": mel, "duration": durations}
+            losses = compute_loss(model_outputs, targets, phoneme_lengths)
             losses = compute_loss(model_outputs, targets)
 
             # 反向传播
@@ -164,13 +162,13 @@ def train(
             with torch.no_grad():
                 for batch in val_dataloader:
                     phoneme_ids = batch["phoneme_ids"].to(device)
+                    phoneme_lengths = batch["phoneme_lengths"].to(device)
                     mel = batch["mel"].to(device)
+                    durations = batch["duration"].to(device)
 
-                    lengths = torch.full((phoneme_ids.size(0),), phoneme_ids.size(1), device=device)
-
-                    model_outputs = model(phoneme_ids, lengths, mel)
-                    targets = {"mel": mel}
-                    losses = compute_loss(model_outputs, targets)
+                    model_outputs = model(phoneme_ids, phoneme_lengths, mel, durations=durations)
+                    targets = {"mel": mel, "duration": durations}
+                    losses = compute_loss(model_outputs, targets, phoneme_lengths)
                     val_losses.append(losses["total_loss"].item())
 
             avg_val_loss = sum(val_losses) / len(val_losses)
@@ -210,6 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None)
     args = parser.parse_args()
 
     # 创建模型
@@ -230,4 +229,4 @@ if __name__ == "__main__":
 
     # 训练
     train(model, train_dataloader, val_dataloader, epochs=args.epochs, lr=args.lr,
-         checkpoint_dir=args.checkpoint_dir)
+         checkpoint_dir=args.checkpoint_dir, resume_from_checkpoint=args.resume_from_checkpoint)

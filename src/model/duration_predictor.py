@@ -66,20 +66,34 @@ class DurationPredictor(nn.Module):
         return duration
 
 
-def regulate_length(encoder_output: torch.Tensor, durations: torch.Tensor) -> torch.Tensor:
-    """根据预测的时长展开编码器输出
+def regulate_length(encoder_output: torch.Tensor, durations: torch.Tensor,
+                    phoneme_lengths: torch.Tensor = None) -> torch.Tensor:
+    """根据每个音素的时长展开编码器输出
 
     Args:
         encoder_output: 编码器输出 (batch, time, channels)
-        durations: 每个位置的时长 (batch, time)
+        durations: 每个音素的时长 (batch, time)，和应为该样本的 mel 帧数
+        phoneme_lengths: 每个样本的实际音素数 (batch,)
 
     Returns:
-        展开后的输出 (batch, max_len, channels)
+        展开后的输出 (batch, max_expanded_len, channels)
     """
     batch_size, time_steps, channels = encoder_output.shape
 
-    # 找到最大长度
-    max_len = durations.sum(dim=1).max().int()
+    if phoneme_lengths is not None:
+        # 只使用有效音素位置的时长
+        # 找到每个样本的总时长
+        max_len = 0
+        total_durations = []
+        for b in range(batch_size):
+            valid_dur = durations[b, :phoneme_lengths[b]]
+            total = valid_dur.sum().int().item()
+            total_durations.append(total)
+            max_len = max(max_len, total)
+    else:
+        max_len = int(durations.sum(dim=1).max().int().item())
+        total_durations = [int(durations[b, :].sum().item()) for b in range(batch_size)]
+        phoneme_lengths = torch.full((batch_size,), time_steps, device=encoder_output.device)
 
     # 初始化输出
     output = torch.zeros(
@@ -91,8 +105,8 @@ def regulate_length(encoder_output: torch.Tensor, durations: torch.Tensor) -> to
     # 对每个样本进行展开
     for b in range(batch_size):
         current_pos = 0
-        for t, dur in enumerate(durations[b]):
-            dur = int(dur.item())
+        for t in range(phoneme_lengths[b]):
+            dur = int(durations[b, t].item())
             if dur > 0 and current_pos + dur <= max_len:
                 output[b, current_pos:current_pos + dur] = encoder_output[b, t]
                 current_pos += dur
