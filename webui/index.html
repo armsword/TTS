@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VITS TTS Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>VITS Text-to-Speech</h1>
+
+        <div class="input-section">
+            <label for="text-input">Enter text to synthesize:</label>
+            <textarea id="text-input" rows="4" placeholder="Type your text here...">Hello world, this is a test.</textarea>
+        </div>
+
+        <div class="controls">
+            <div class="language-select">
+                <label for="language">Language:</label>
+                <select id="language">
+                    <option value="en">English</option>
+                    <option value="zh">Chinese</option>
+                </select>
+            </div>
+
+            <button id="synthesize-btn">Synthesize</button>
+        </div>
+
+        <div class="status" id="status"></div>
+
+        <div class="output-section" id="output-section" style="display: none;">
+            <h2>Generated Audio</h2>
+            <audio id="audio-player" controls></audio>
+            <button id="download-btn" class="download-btn">Download WAV</button>
+        </div>
+    </div>
+
+    <script>
+        const synthesizeBtn = document.getElementById('synthesize-btn');
+        const textInput = document.getElementById('text-input');
+        const languageSelect = document.getElementById('language');
+        const statusDiv = document.getElementById('status');
+        const outputSection = document.getElementById('output-section');
+        const audioPlayer = document.getElementById('audio-player');
+        const downloadBtn = document.getElementById('download-btn');
+
+        let currentAudioBlob = null;
+
+        synthesizeBtn.addEventListener('click', async () => {
+            const text = textInput.value.trim();
+            if (!text) {
+                statusDiv.textContent = 'Please enter some text.';
+                return;
+            }
+
+            const language = languageSelect.value;
+            statusDiv.textContent = 'Synthesizing...';
+            synthesizeBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text, language })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Synthesis failed');
+                }
+
+                currentAudioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(currentAudioBlob);
+                audioPlayer.src = audioUrl;
+
+                outputSection.style.display = 'block';
+                statusDiv.textContent = 'Synthesis complete!';
+            } catch (error) {
+                statusDiv.textContent = 'Error: ' + error.message;
+            } finally {
+                synthesizeBtn.disabled = false;
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (currentAudioBlob) {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(currentAudioBlob);
+                a.download = 'tts_output.wav';
+                a.click();
+            }
+        });
+    </script>
+</body>
+</html>
