@@ -19,7 +19,6 @@ def compute_loss(model_output: Dict[str, torch.Tensor], targets: Dict[str, torch
             - log_var: VAE 对数方差 (batch, time, latent_dim)
         targets: 目标，包含:
             - mel: 目标梅尔频谱 (batch, n_mels, time)
-            - duration: 目标时长 (batch, time)
 
     Returns:
         损失字典，包含:
@@ -34,15 +33,19 @@ def compute_loss(model_output: Dict[str, torch.Tensor], targets: Dict[str, torch
     log_var = model_output["log_var"]
 
     mel_target = targets["mel"]
-    duration_target = targets["duration"]
 
     # 梅尔频谱重建损失 (L1)
     mel_loss = torch.nn.functional.l1_loss(mel_output, mel_target)
 
-    # 时长预测损失 (MSE) - 使用 log 尺度
-    duration_pred_log = torch.log(duration_pred + 1e-5)
-    duration_target_log = torch.log(duration_target.float() + 1e-5)
-    duration_loss = torch.nn.functional.mse_loss(duration_pred_log, duration_target_log)
+    # 时长预测损失 (MSE) - 预测时长应该接近目标时长
+    # 注意：duration_pred 是每个音素的时长，targets 中可能有 duration
+    duration_target = targets.get("duration", None)
+    if duration_target is not None:
+        duration_pred_log = torch.log(duration_pred + 1e-5)
+        duration_target_log = torch.log(duration_target.float() + 1e-5)
+        duration_loss = torch.nn.functional.mse_loss(duration_pred_log, duration_target_log)
+    else:
+        duration_loss = torch.tensor(0.0, device=mel_output.device)
 
     # KL 散度损失
     # KL(N(mu, sigma) || N(0, 1)) = -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
@@ -129,18 +132,15 @@ def train(
             # 将数据移到设备
             phoneme_ids = batch["phoneme_ids"].to(device)
             mel = batch["mel"].to(device)
-            durations = batch.get("duration", None)
-            if durations is not None:
-                durations = durations.to(device)
 
             # 准备长度
             lengths = torch.full((phoneme_ids.size(0),), phoneme_ids.size(1), device=device)
 
-            # 前向传播
+            # 前向传播（不传 durations，让模型自己预测时长）
             model_outputs = model(phoneme_ids, lengths, mel)
 
             # 计算损失
-            targets = {"mel": mel, "duration": durations} if durations is not None else {"mel": mel}
+            targets = {"mel": mel}
             losses = compute_loss(model_outputs, targets)
 
             # 反向传播
@@ -165,14 +165,11 @@ def train(
                 for batch in val_dataloader:
                     phoneme_ids = batch["phoneme_ids"].to(device)
                     mel = batch["mel"].to(device)
-                    durations = batch.get("duration", None)
-                    if durations is not None:
-                        durations = durations.to(device)
 
                     lengths = torch.full((phoneme_ids.size(0),), phoneme_ids.size(1), device=device)
 
                     model_outputs = model(phoneme_ids, lengths, mel)
-                    targets = {"mel": mel, "duration": durations} if durations is not None else {"mel": mel}
+                    targets = {"mel": mel}
                     losses = compute_loss(model_outputs, targets)
                     val_losses.append(losses["total_loss"].item())
 

@@ -1,6 +1,7 @@
 """VITS 主模型 - 条件变分自编码器用于文本到语音合成"""
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from config import (
     TextEncoderConfig, DecoderConfig, DurationPredictorConfig,
     HiFiGANConfig, TrainConfig
@@ -32,13 +33,14 @@ class VITS(nn.Module):
         self.configs = configs
 
     def forward(self, phoneme_ids: torch.Tensor, phoneme_lengths: torch.Tensor,
-                mel_targets: torch.Tensor = None) -> dict:
+                mel_targets: torch.Tensor = None, durations: torch.Tensor = None) -> dict:
         """训练模式前向传播
 
         Args:
             phoneme_ids: 音素 IDs (batch, time)
             phoneme_lengths: 每个样本的实际长度 (batch,)
             mel_targets: 目标梅尔频谱 (batch, n_mels, target_time) - 可选
+            durations: 目标时长 (batch, time) - 可选，用于展长
 
         Returns:
             包含预测结果的字典
@@ -49,10 +51,13 @@ class VITS(nn.Module):
         # 时长预测
         duration_pred = self.duration_predictor(encoder_output, mask)
 
-        # 展长（根据预测的时长）
-        # 注意：这里使用简化的展长逻辑
-        durations = duration_pred.unsqueeze(-1)  # (batch, time, 1)
-        expanded_output = regulate_length(encoder_output, durations.squeeze(-1))
+        # 展长：优先使用目标时长，否则使用预测时长
+        if durations is not None:
+            # 使用目标时长展长
+            expanded_output = regulate_length(encoder_output, durations.float())
+        else:
+            # 使用预测时长展长
+            expanded_output = regulate_length(encoder_output, duration_pred)
 
         # VAE: 计算 mu 和 log_var
         mu = self.proj_mu(expanded_output)
@@ -63,6 +68,19 @@ class VITS(nn.Module):
 
         # 解码到梅尔频谱
         mel_output = self.decoder.decode(z)
+
+        # 如果有目标梅尔频谱，调整输出长度匹配目标
+        if mel_targets is not None:
+            target_len = mel_targets.shape[2]
+            mel_output_len = mel_output.shape[2]
+
+            if mel_output_len != target_len:
+                # 截断或 padding 到目标长度
+                if mel_output_len > target_len:
+                    mel_output = mel_output[:, :, :target_len]
+                else:
+                    padding = target_len - mel_output_len
+                    mel_output = F.pad(mel_output, (0, padding))
 
         return {
             'mel_output': mel_output,

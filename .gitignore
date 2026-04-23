@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Data
+data/raw/
+data/mock_ljspeech/
+data/mock_output/
+data/checkpoints/
+data/test_output.wav
+models/*.pt
+!models/__init__.py
+
+# Mac
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
