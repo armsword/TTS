@@ -3,7 +3,8 @@ import os
 import sys
 import io
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+# 添加 src 目录到 path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from flask import Flask, request, jsonify, send_file, Response
 from infer import TTSInferencer

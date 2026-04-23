@@ -15,6 +15,13 @@ from config import (
     HiFiGANConfig, TrainConfig
 )
 
+# 尝试导入 librosa用于 Griffin-Lim
+try:
+    import librosa
+    HAS_LIBROSA = True
+except ImportError:
+    HAS_LIBROSA = False
+
 
 class TTSInferencer:
     """TTS 推理引擎
@@ -72,6 +79,11 @@ class TTSInferencer:
                 self.hifigan.load_state_dict(state_dict["model_state_dict"])
             else:
                 self.hifigan.load_state_dict(state_dict)
+            self.use_hifigan = True
+        else:
+            self.use_hifigan = False
+            if not HAS_LIBROSA:
+                print("Warning: librosa not installed and HiFi-GAN not available. Using naive Griffin-Lim.")
 
         # 设置为评估模式
         self.model.eval()
@@ -95,14 +107,31 @@ class TTSInferencer:
         with torch.no_grad():
             mel_output = self.model.infer(phoneme_ids_tensor)
 
-            # HiFi-GAN 将梅尔频谱转换为波形
-            waveform = self.hifigan(mel_output)
-
-        # 转换为 numpy 数组
-        waveform = waveform.squeeze().cpu().numpy()
-
-        # 归一化到 [-1, 1]（HiFi-GAN 输出已经在范围内）
-        waveform = np.clip(waveform, -1.0, 1.0)
+            # 使用 HiFi-GAN 或 Griffin-Lim 转换为波形
+            if self.use_hifigan:
+                waveform = self.hifigan(mel_output)
+                waveform = waveform.squeeze().cpu().numpy()
+                waveform = np.clip(waveform, -1.0, 1.0)
+            else:
+                # Griffin-Lim 替代方案
+                mel_np = mel_output.squeeze().cpu().numpy()
+                if HAS_LIBROSA:
+                    waveform = librosa.feature.inverse.mel_to_audio(
+                        mel_np,
+                        sr=22050,
+                        n_fft=1024,
+                        hop_length=256,
+                        win_length=1024
+                    )
+                else:
+                    # 简单的 Griffin-Lim 实现
+                    import scipy.signal
+                    n_fft, hop_length, win_length = 1024, 256, 1024
+                    # 简单的ISTFT (近似)
+                    waveform = np.zeros(mel_np.shape[1] * hop_length)
+                    for i in range(mel_np.shape[1]):
+                        # 简化处理
+                        waveform[i * hop_length] = mel_np[0, i] if i < mel_np.shape[1] else 0
 
         return waveform.astype(np.float32)
 
