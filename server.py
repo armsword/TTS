@@ -18,14 +18,36 @@ app = Flask(__name__, static_folder='webui', static_url_path='')
 inferencer = None
 
 
-CHECKPOINT_PATH = "data/checkpoints/checkpoint_epoch_30.pt"
+CHECKPOINT_DIR = "data/checkpoints_v2"
+
+
+def get_latest_checkpoint():
+    """获取最新的 checkpoint 路径
+
+    优先使用 best_model.pt，否则使用最新的 epoch checkpoint
+    """
+    best = os.path.join(CHECKPOINT_DIR, "best_model.pt")
+    if os.path.exists(best):
+        return best
+
+    import glob
+    checkpoints = sorted(glob.glob(os.path.join(CHECKPOINT_DIR, "checkpoint_epoch_*.pt")))
+    return checkpoints[-1] if checkpoints else None
 
 
 def get_inferencer():
     """获取或创建推理器实例"""
     global inferencer
     if inferencer is None:
-        inferencer = TTSInferencer(checkpoint_path=CHECKPOINT_PATH)
+        checkpoint_path = get_latest_checkpoint()
+        inferencer = TTSInferencer(checkpoint_path=checkpoint_path)
+    else:
+        # 每次请求时检查是否有新的 checkpoint
+        new_checkpoint = get_latest_checkpoint()
+        if new_checkpoint and (inferencer is not None and
+                getattr(inferencer, '_checkpoint_path', None) != new_checkpoint):
+            print(f"[Server] 检测到新 checkpoint: {new_checkpoint}，重新加载模型...")
+            inferencer = TTSInferencer(checkpoint_path=new_checkpoint)
     return inferencer
 
 
