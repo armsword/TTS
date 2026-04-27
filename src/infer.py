@@ -279,6 +279,23 @@ class TTSInferencer:
 
         return mel_basis
 
+    @staticmethod
+    def to_int16_wav(waveform: np.ndarray) -> np.ndarray:
+        """将 float32 波形转换为 int16 格式（浏览器兼容）
+
+        Args:
+            waveform: float32 波形
+
+        Returns:
+            int16 波形
+        """
+        # 归一化到 [-1, 1]
+        max_val = np.abs(waveform).max()
+        if max_val > 1e-6:
+            waveform = waveform / max_val * 0.95
+        # 转 int16
+        return (waveform * 32767).astype(np.int16)
+
     def synthesize_to_file(self, text: str, output_path: str, language: str = "en"):
         """合成语音并保存到文件
 
@@ -291,8 +308,8 @@ class TTSInferencer:
 
         waveform = self.synthesize(text, language)
 
-        # 保存为 wav 文件
-        wavfile.write(output_path, 22050, waveform)
+        # 保存为 int16 wav 文件（浏览器兼容）
+        wavfile.write(output_path, 22050, self.to_int16_wav(waveform))
 
 
 if __name__ == "__main__":

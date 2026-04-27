@@ -78,10 +78,10 @@ def tts():
         inf = get_inferencer()
         waveform = inf.synthesize(text, language)
 
-        # 转换为 wav 格式的二进制
+        # 转换为 int16 wav 格式（浏览器兼容）
         import scipy.io.wavfile as wavfile
         buffer = io.BytesIO()
-        wavfile.write(buffer, 22050, waveform)
+        wavfile.write(buffer, 22050, inf.to_int16_wav(waveform))
         buffer.seek(0)
 
         return send_file(
