@@ -33,7 +33,8 @@ class VITS(nn.Module):
         self.configs = configs
 
     def forward(self, phoneme_ids: torch.Tensor, phoneme_lengths: torch.Tensor,
-                mel_targets: torch.Tensor = None, durations: torch.Tensor = None) -> dict:
+                mel_targets: torch.Tensor = None, durations: torch.Tensor = None,
+                use_predicted_duration: bool = False) -> dict:
         """训练模式前向传播
 
         Args:
@@ -41,6 +42,7 @@ class VITS(nn.Module):
             phoneme_lengths: 每个样本的实际长度 (batch,)
             mel_targets: 目标梅尔频谱 (batch, n_mels, target_time) - 可选
             durations: 目标时长 (batch, time) - 可选，用于展长
+            use_predicted_duration: 是否使用预测的时长（而非 ground truth）
 
         Returns:
             包含预测结果的字典
@@ -51,12 +53,12 @@ class VITS(nn.Module):
         # 时长预测
         duration_pred = self.duration_predictor(encoder_output, mask)
 
-        # 展长：优先使用目标时长（teacher forcing），否则使用预测时长
-        if durations is not None:
-            # 使用 ground truth 时长（每个音素的帧数）
+        # 展长：使用 ground truth 或预测的时长
+        if durations is not None and not use_predicted_duration:
+            # 使用 ground truth 时长（teacher forcing）
             expanded_output = regulate_length(encoder_output, durations, phoneme_lengths)
         else:
-            # 使用预测时长（推理时）
+            # 使用预测时长（让 duration_predictor 从错误中学习）
             expanded_output = regulate_length(encoder_output, duration_pred, phoneme_lengths)
 
         # VAE: 计算 mu 和 log_var
@@ -108,12 +110,11 @@ class VITS(nn.Module):
         # 展长（推理时用预测时长）
         expanded_output = regulate_length(encoder_output, duration_pred, phoneme_lengths)
 
-        # VAE: 计算 mu 和 log_var（使用确定性输出，log_var=0）
+        # VAE: 推理时直接使用均值，不添加随机噪声
         mu = self.proj_mu(expanded_output)
-        log_var = torch.zeros_like(mu)
 
-        # 重参数化采样
-        z = self.decoder.reparameterize(mu, log_var)
+        # 推理时跳过重参数化，直接用 mu 作为确定性输出
+        z = mu
 
         # 解码到梅尔频谱
         mel_output = self.decoder.decode(z)

@@ -12,13 +12,6 @@ PHONEME_LIST = [
     "AA", "AE", "AH", "AO", "AW", "AY",
     "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW",
 
-    # 元音 (Diphthongs) - 已在上面包含
-
-    # 停顿符
-    "B",  # breath
-    "DD",  # dead
-    "E",  # error
-
     # 辅音 (Stops)
     "P", "B", "T", "D", "K", "G",
 
