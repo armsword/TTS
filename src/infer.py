@@ -111,6 +111,32 @@ class TTSInferencer:
         self.model.eval()
         self.hifigan.eval()
 
+    # 训练数据 mel 统计量（从 LJSpeech 预处理数据计算）
+    _TRAIN_MEL_MEAN = -14.9558
+    _TRAIN_MEL_STD = 17.2278
+
+    def _normalize_mel(self, mel_db: np.ndarray) -> np.ndarray:
+        """将模型输出的 mel 缩放到与训练数据一致的分布
+
+        模型欠训练时输出的 mel 值域偏窄（std~10 vs 真实~17），
+        导致转换出的音频能量极低。通过分布匹配修正。
+
+        Args:
+            mel_db: 模型输出的 mel (n_mels, time)
+
+        Returns:
+            缩放后的 mel (n_mels, time)
+        """
+        model_mean = mel_db.mean()
+        model_std = mel_db.std()
+        if model_std < 1e-6:
+            return mel_db
+
+        # z-score 归一化后映射到训练数据分布
+        mel_normalized = (mel_db - model_mean) / model_std
+        mel_scaled = mel_normalized * self._TRAIN_MEL_STD + self._TRAIN_MEL_MEAN
+        return mel_scaled
+
     def synthesize(self, text: str, language: str = "en") -> np.ndarray:
         """合成语音
 
@@ -136,21 +162,26 @@ class TTSInferencer:
                 waveform = np.clip(waveform, -1.0, 1.0)
             else:
                 # Griffin-Lim 替代方案
-                mel_db = mel_output.squeeze().cpu().numpy()  # dB 格式
+                mel_db = mel_output.squeeze().cpu().numpy()
+
+                # 对 mel 做分布匹配，修正模型输出值域偏窄的问题
+                mel_db = self._normalize_mel(mel_db)
+
                 if HAS_LIBROSA:
-                    # 将 dB 转换回线性功率谱
-                    # dB = 10 * log10(power) => power = 10^(dB/10)
+                    # dB → 线性功率 → librosa Griffin-Lim
                     mel_power = np.power(10.0, mel_db / 10.0)
+                    mel_power = np.maximum(mel_power, 1e-10)
 
                     waveform = librosa.feature.inverse.mel_to_audio(
                         mel_power,
                         sr=22050,
                         n_fft=1024,
                         hop_length=256,
-                        win_length=1024
+                        win_length=1024,
+                        n_iter=64,
                     )
                 else:
-                    # 真正的 Griffin-Lim 实现
+                    # 自实现 Griffin-Lim
                     waveform = self._griffin_lim(mel_db)
 
         return waveform.astype(np.float32)
